@@ -140,17 +140,48 @@ Default mengikuti `settings.json` (`"upscale": true`).
 
 Pilih sendiri format yang ingin dibuat lewat `--out` / menu `JALANKAN.bat`:
 
-- **image** — `output/*_colored.png` (satu per halaman, sudah di-upscale 2×).
-- **cbz** — `chapter.cbz` (+ `<nama>_colorized.cbz` bila input berupa `.cbz`).
-  ZIP halaman urut baca + `ComicInfo.xml`. Bisa dibuka di Tachiyomi, CDisplayEx,
-  YACReader, dsb.
-- **pdf** — `chapter.pdf` (satu halaman per gambar).
+- **image** — halaman berwarna per halaman (sudah di-upscale 2×).
+- **cbz** — satu komik berwarna (`<nama>_colorized.cbz`). ZIP halaman urut baca +
+  `ComicInfo.xml`. Bisa dibuka di Tachiyomi, CDisplayEx, YACReader, dsb.
+- **pdf** — satu dokumen berwarna (`<nama>_colorized.pdf`, satu halaman per gambar).
+
+Layout output:
+
+- **Input satu `.cbz`** (mis. `input/Chapter 1 END_e29f39.cbz`):
+  ```
+  output/
+  ├── Chapter 1 END_e29f39/                  ← halaman berwarna (kalau "image" dipilih)
+  │   ├── 0001_colored.webp
+  │   └── ...
+  ├── Chapter 1 END_e29f39_colorized.cbz      ← di root output/
+  └── Chapter 1 END_e29f39_colorized.pdf
+  ```
+  (kalau `image` tidak dipilih, folder `Chapter 1 END_e29f39/` dihapus otomatis)
+
+- **Input beberapa `.cbz`** (`input/a.cbz`, `input/b.cbz`): **tiap arsip diisolasi**,
+  jadi halaman tidak saling menimpa. CBZ/PDF tiap arsip diletakkan langsung di
+  `output/`:
+  ```
+  output/
+  ├── a/            ← halaman a (kalau "image" dipilih)
+  ├── a_colorized.cbz
+  ├── a_colorized.pdf
+  ├── b/
+  ├── b_colorized.cbz
+  └── b_colorized.pdf
+  ```
+
+- **Input gambar lepas** (mis. `input/*.png`): gambar digabung jadi **satu**
+  `output/<nama>_colorized.cbz` + `.pdf` (perilaku seperti sebelumnya).
+
+Nama file mengikuti **nama input** (+ akhiran `_colorized`). Untuk banyak arsip,
+tiap file mengikuti nama arsipnya masing-masing.
 
 ### Input CBZ / ZIP
 Taruh file `.cbz` (atau `.zip`) langsung di folder `input/`. Pipeline akan:
-1. mengekstrak halaman ke `output/<nama>_pages/` (urutan tetap),
-2. mewarnai tiap halaman,
-3. membungkus ulang menjadi `output/<nama>_colorized.cbz`.
+1. mengekstrak halaman ke folder **sementara** (otomatis dihapus setelah selesai),
+2. mewarnai tiap halaman ke subfolder `output/<nama>/`,
+3. membungkus ulang menjadi `output/<nama>_colorized.cbz` (+ `.pdf` bila dipilih).
 
 Atau lewat CLI:
 ```bash

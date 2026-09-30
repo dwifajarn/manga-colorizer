@@ -8,8 +8,10 @@ python src/cli.py check
 # Colorize a single image (default engine = comicnet)
 python src/cli.py colorize input/page_01.png output/page_01.png
 
-# Colorize a whole chapter, then build a CBZ and a PDF
-python src/cli.py chapter input/ output/ --cbz out/chapter1.cbz --pdf out/chapter1.pdf
+# Colorize a whole chapter, then build a CBZ and a PDF.
+# Outputs follow the input name: output/<name>_colorized.cbz / .pdf (one per
+# .cbz archive; loose images are combined into one).
+python src/cli.py chapter input/ output/ --out cbz,pdf
 
 # Just batch-colorize a folder
 python src/cli.py batch input/ output/
@@ -136,12 +138,68 @@ def _cmd_colorize(args: argparse.Namespace) -> int:
     return 0 if ok else 1
 
 
+def _input_stem(args: argparse.Namespace) -> str:
+    """Base name for outputs, taken from the input file/folder.
+
+    Follows the input name with a ``_colorized`` suffix, e.g.:
+
+    - input ``Chapter 1 END_e29f39.cbz``      -> ``Chapter 1 END_e29f39_colorized``
+    - input folder ``input/`` with one image  -> ``<image stem>_colorized``
+    - input folder with many images           -> ``<folder name>_colorized``
+    """
+    inp = getattr(args, "input", None)
+    name = "chapter"
+    if inp is not None:
+        inp = Path(inp)
+        if inp.is_file():
+            name = inp.stem
+        else:
+            # Folder: follow its content. A single source (one .cbz/.zip or one
+            # loose image) lends its name; otherwise use the folder name unless
+            # it is a generic "input" folder, then fall back to the first item.
+            try:
+                import batch as _batch
+
+                settings = load_settings()
+                exts = settings.get("supported_ext", [".png", ".jpg", ".jpeg"])
+                imgs = _batch.collect_images(inp, exts)
+                arcs = _batch.collect_archives(inp)
+                sources = arcs + imgs
+                if len(sources) == 1:
+                    name = sources[0].stem
+                elif inp.name and inp.name.lower() != "input":
+                    name = inp.name
+                elif sources:
+                    name = sources[0].stem
+                elif inp.name:
+                    name = inp.name
+            except Exception:  # noqa: BLE001
+                if inp.name:
+                    name = inp.name
+    return f"{name}_colorized"
+
+
 def _emit_outputs(settings: dict, args: argparse.Namespace,
-                  produced: list, want: set[str] | None = None) -> None:
-    """Build CBZ/PDF and optionally prune images according to the selection."""
+                  archive_results: list, loose_files: list,
+                  want: set[str] | None = None) -> None:
+    """Build CBZ/PDF outputs from the colorized pages.
+
+    Layout:
+
+    - **Per archive** (``input/*.cbz``): pages live in ``output/<name>/`` and the
+      CBZ/PDF are written to the ``output/`` root as ``<name>_colorized.{cbz,pdf}``.
+    - **Loose images**: combined into a single ``<input>_colorized.{cbz,pdf}`` in
+      the root (pages stay flat in ``output/``).
+
+    When ``image`` is not among ``want`` (and ``keep_images`` is off) the
+    intermediate colorized pages — and now-empty per-archive folders — are
+    removed.
+    """
+    import shutil
+
     from package import make_cbz, make_pdf
 
-    if not produced:
+    if not archive_results and not loose_files:
         print("[output] nothing colorized; no outputs written.")
         return
 
@@ -155,23 +213,59 @@ def _emit_outputs(settings: dict, args: argparse.Namespace,
     out_dir = Path(getattr(args, "output", Path(".")))
     print(f"[output] formats: {', '.join(sorted(want))}")
 
-    if "cbz" in want:
-        cbz_path = getattr(args, "cbz", None) or (out_dir / "chapter.cbz")
-        make_cbz(out_dir, Path(cbz_path), files=produced,
-                 title=getattr(args, "title", None) or Path(cbz_path).stem)
-    if "pdf" in want:
-        pdf_path = getattr(args, "pdf", None) or (out_dir / "chapter.pdf")
-        make_pdf(out_dir, Path(pdf_path), files=produced)
+    # 1) One CBZ + PDF per archive, named after the archive, in the root.
+    for res in archive_results:
+        name = res.archive.stem
+        if "cbz" in want:
+            make_cbz(res.pages_dir, out_dir / f"{name}_colorized.cbz",
+                     files=res.produced,
+                     title=getattr(args, "title", None) or name)
+        if "pdf" in want:
+            make_pdf(res.pages_dir, out_dir / f"{name}_colorized.pdf",
+                     files=res.produced)
 
+    # 2) Loose images -> one combined CBZ + PDF named after the input. When
+    #    archives are also present, avoid clashing with their names (which are
+    #    taken from each archive file) by naming the combined output after the
+    #    input folder instead.
+    if loose_files:
+        if archive_results:
+            inp = Path(getattr(args, "input", Path(".")))
+            base = f"{(inp.name or 'chapter')}_colorized"
+        else:
+            base = _input_stem(args)
+        if "cbz" in want:
+            cbz_path = getattr(args, "cbz", None) or (out_dir / f"{base}.cbz")
+            make_cbz(out_dir, Path(cbz_path), files=loose_files,
+                     title=getattr(args, "title", None) or Path(cbz_path).stem)
+        if "pdf" in want:
+            pdf_path = getattr(args, "pdf", None) or (out_dir / f"{base}.pdf")
+            make_pdf(out_dir, Path(pdf_path), files=loose_files)
+
+    # 3) Prune intermediate colorized pages when the user didn't ask for them.
     keep = bool(settings.get("keep_images", False))
     if "image" not in want and not keep:
-        for p in produced:
-            try:
-                Path(p).unlink()
-            except OSError:
-                pass
-        print("[output] intermediate images removed "
-              "(use --out image or keep_images=true to keep them)")
+        removed = 0
+        for res in archive_results:
+            removed += _prune_images(res.produced)
+            # Drop the per-archive page folder once it is empty.
+            shutil.rmtree(res.pages_dir, ignore_errors=True)
+        removed += _prune_images(loose_files)
+        if removed:
+            print("[output] intermediate images removed "
+                  "(use --out image or keep_images=true to keep them)")
+
+
+def _prune_images(files: list) -> int:
+    """Delete the given files, returning how many were removed."""
+    removed = 0
+    for p in files:
+        try:
+            Path(p).unlink()
+            removed += 1
+        except OSError:
+            pass
+    return removed
 
 
 def _cmd_batch(args: argparse.Namespace) -> int:
@@ -183,32 +277,31 @@ def _cmd_batch(args: argparse.Namespace) -> int:
         print(f"[output] {exc}")
         return 2
     # Handles both loose images and .cbz/.zip archives in the input folder.
-    ok, failed, produced = colorize_input(
+    # CBZ/PDF are built by _emit_outputs, so no packing happens during colorize.
+    ok, failed, archives, loose = colorize_input(
         args.input, args.output, colorizer=colorizer, upscale=args.upscale,
-        repack_cbz=("cbz" in want),
+        repack_cbz=False,
     )
-    _emit_outputs(settings, args, produced, want=want)
+    _emit_outputs(settings, args, archives, loose, want=want)
     return 0 if failed == 0 else 1
 
 
 def _cmd_cbz(args: argparse.Namespace) -> int:
     settings = _apply_overrides(load_settings(), args)
     colorizer = build_engine(settings)
-    ok, failed, produced = colorize_archive(
-        args.input, args.output, colorizer=colorizer, upscale=args.upscale,
-        repack_cbz=True,  # the whole point of this command
-    )
     # Respect --out for extra formats (pdf = also emit a PDF).
     try:
         want = _resolve_outputs(settings, args)
     except ValueError as exc:
         print(f"[cbz] {exc}")
         return 2
-    if "pdf" in want and produced:
-        from package import make_pdf
-
-        pdf_path = Path(args.output) / f"{Path(args.input).stem}_colorized.pdf"
-        make_pdf(Path(args.output), pdf_path, files=produced)
+    ok, failed, res = colorize_archive(
+        args.input, args.output, colorizer=colorizer, upscale=args.upscale,
+        repack_cbz=False,  # _emit_outputs packs the CBZ/PDF
+    )
+    # Reuse the shared emitter so naming/layout stays consistent (per-archive
+    # CBZ + PDF in the output root).
+    _emit_outputs(settings, args, [res], [], want=want)
     print(f"[cbz] done. colorized -> {args.output}")
     return 0 if failed == 0 else 1
 
@@ -221,11 +314,11 @@ def _cmd_chapter(args: argparse.Namespace) -> int:
     except ValueError as exc:
         print(f"[output] {exc}")
         return 2
-    ok, failed, produced = colorize_input(
+    ok, failed, archives, loose = colorize_input(
         args.input, args.output, colorizer=colorizer, upscale=args.upscale,
-        repack_cbz=("cbz" in want),
+        repack_cbz=False,
     )
-    _emit_outputs(settings, args, produced, want=want)
+    _emit_outputs(settings, args, archives, loose, want=want)
     return 0 if failed == 0 else 1
 
 

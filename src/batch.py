@@ -12,6 +12,7 @@ The colorization engine is selected via ``settings["engine"]``:
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Iterable
 
@@ -19,6 +20,20 @@ from colorize import Colorizer, load_settings
 
 # Regex to sort names like "page_2.png" before "page_10.png".
 _NUM_RE = re.compile(r"(\d+)")
+
+
+@dataclass
+class ArchiveResult:
+    """Result for one colorized comic archive (.cbz/.zip).
+
+    ``pages_dir`` is the isolated folder holding the colorized page images,
+    ``produced`` is the list of those image files (natural order). The CLI uses
+    these to build the per-archive CBZ/PDF in the output root.
+    """
+
+    archive: Path
+    pages_dir: Path
+    produced: list[Path] = field(default_factory=list)
 
 
 def _natural_key(path: Path) -> list:
@@ -140,43 +155,70 @@ def colorize_archive(
     output_dir: Path | str,
     colorizer=None,
     upscale: bool | None = None,
-    keep_pages: bool = True,
+    keep_pages: bool = False,
     repack_cbz: bool = True,
-) -> tuple[int, int, list[Path]]:
-    """Colorize a single CBZ, writing the pages (+ optionally a new .cbz).
+    pages_dir: Path | str | None = None,
+) -> tuple[int, int, ArchiveResult]:
+    """Colorize a single CBZ, writing its pages into their own subfolder.
 
-    Steps: extract pages -> colorize (folder pass) -> pack back into
-    ``<name>_colorized.cbz`` (when ``repack_cbz`` is True). Pages are also left
-    on disk under ``output_dir/<name>_pages/`` (unless ``keep_pages`` is False).
+    Steps: extract pages into a temporary folder -> colorize them into
+    ``pages_dir`` (an isolated per-archive folder so pages from different
+    archives never collide) -> optionally pack them into
+    ``<name>_colorized.cbz`` next to the other outputs.
 
-    Returns ``(success, failed, produced_page_files)``.
+    The extracted B&W pages live in a temporary directory so they never clutter
+    ``output/``; it is always removed when done (set ``keep_pages=True`` to keep
+    it, e.g. for debugging).
+
+    ``pages_dir`` defaults to ``output_dir/<archive stem>/`` — the colorized
+    pages of each archive go there, keeping multi-archive runs isolated.
+
+    Returns ``(success, failed, ArchiveResult)`` where the result carries the
+    archive, its pages folder and the colorized page files.
     """
+    import shutil
+    import tempfile
+
     from cbz import extract_cbz
 
     settings = (getattr(colorizer, "settings", None) or load_settings())
     archive = Path(archive)
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+    if pages_dir is None:
+        pages_dir = output_dir / archive.stem
+    pages_dir = Path(pages_dir)
+    pages_dir.mkdir(parents=True, exist_ok=True)
 
-    pages_in = output_dir / f"{archive.stem}_pages"
-    extract_cbz(archive, pages_in)
+    # Extract into a temp dir so the intermediate B&W pages don't pile up in
+    # output/ (e.g. output/<name>_pages/). Removed at the end regardless.
+    if keep_pages:
+        pages_in = output_dir / f"{archive.stem}_pages"
+        pages_in.mkdir(parents=True, exist_ok=True)
+        remove_pages = False
+    else:
+        # System temp dir: never touches output/, so the user only sees results.
+        pages_in = Path(tempfile.mkdtemp(prefix=f"{archive.stem}_pages_"))
+        remove_pages = True
 
-    ok, failed, produced = colorize_folder(
-        pages_in, output_dir, colorizer=colorizer, upscale=upscale
-    )
+    try:
+        extract_cbz(archive, pages_in)
 
-    if produced and repack_cbz:
-        from package import make_cbz
+        ok, failed, produced = colorize_folder(
+            pages_in, pages_dir, colorizer=colorizer, upscale=upscale
+        )
 
-        out_cbz = output_dir / f"{archive.stem}_colorized.cbz"
-        make_cbz(output_dir, out_cbz, files=produced, title=archive.stem)
+        if produced and repack_cbz:
+            from package import make_cbz
 
-    if not keep_pages:
-        import shutil
+            out_cbz = output_dir / f"{archive.stem}_colorized.cbz"
+            make_cbz(pages_dir, out_cbz, files=produced, title=archive.stem)
+    finally:
+        if remove_pages:
+            shutil.rmtree(pages_in, ignore_errors=True)
 
-        shutil.rmtree(pages_in, ignore_errors=True)
-
-    return ok, failed, produced
+    return ok, failed, ArchiveResult(archive=archive, pages_dir=pages_dir,
+                                     produced=produced)
 
 
 def colorize_input(
@@ -185,19 +227,26 @@ def colorize_input(
     colorizer=None,
     upscale: bool | None = None,
     repack_cbz: bool = True,
-) -> tuple[int, int, list[Path]]:
+) -> tuple[int, int, list[ArchiveResult], list[Path]]:
     """Colorize everything found in ``input_dir``.
 
-    Handles **both** loose images and comic archives (.cbz/.zip). Loose images
-    are processed directly; each archive is extracted, colorized and (when
-    ``repack_cbz`` is True) packed back into ``<name>_colorized.cbz``.
+    Handles **both** loose images and comic archives (.cbz/.zip).
+
+    - Each archive is colorized into its **own** subfolder under ``output_dir``
+      (``<name>/``), so pages from different archives never collide. When
+      ``repack_cbz`` is True each archive also gets ``<name>_colorized.cbz``.
+    - Loose images are colorized flat into ``output_dir``.
+
+    Returns ``(success, failed, archive_results, loose_files)`` so the caller can
+    build the right per-archive (and/or combined) CBZ/PDF outputs.
     """
     settings = (getattr(colorizer, "settings", None) or load_settings())
     if colorizer is None:
         colorizer = build_engine(settings)
 
     total_ok = total_failed = 0
-    all_produced: list[Path] = []
+    archive_results: list[ArchiveResult] = []
+    loose_files: list[Path] = []
 
     archives = collect_archives(input_dir)
     exts = settings.get("supported_ext", [".png", ".jpg", ".jpeg"])
@@ -206,29 +255,29 @@ def colorize_input(
     if not archives and not images:
         print(f"[batch] nothing to do in {input_dir} "
               "(put images or a .cbz there)")
-        return 0, 0, []
+        return 0, 0, [], []
 
-    # 1) Comic archives.
+    # 1) Comic archives — each into its own output subfolder.
     for arc in archives:
         print(f"[batch] archive: {arc.name}")
-        ok, failed, produced = colorize_archive(
+        ok, failed, result = colorize_archive(
             arc, output_dir, colorizer=colorizer, upscale=upscale,
             repack_cbz=repack_cbz,
         )
         total_ok += ok
         total_failed += failed
-        all_produced.extend(produced)
+        archive_results.append(result)
 
-    # 2) Loose images.
+    # 2) Loose images — flat into the output folder (combined later).
     if images:
         ok, failed, produced = colorize_folder(
             input_dir, output_dir, colorizer=colorizer, upscale=upscale
         )
         total_ok += ok
         total_failed += failed
-        all_produced.extend(produced)
+        loose_files.extend(produced)
 
-    return total_ok, total_failed, all_produced
+    return total_ok, total_failed, archive_results, loose_files
 
 
 if __name__ == "__main__":
