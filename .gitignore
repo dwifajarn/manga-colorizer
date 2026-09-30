@@ -1,0 +1,38 @@
+# Model weights (large, downloaded via scripts/download_model.py)
+models/**/*.pth
+models/**/*.pt
+models/**/*.onnx
+models/**/*.zip
+models/**/*.caffemodel
+models/**/*.prototxt
+models/**/*.npy
+models/*.pth
+models/*.pt
+models/*.onnx
+models/*.zip
+models/*.caffemodel
+models/*.prototxt
+models/*.npy
+
+# Vendored network weights (copied at runtime, not stored in the repo)
+src/mangacolv2_repo/denoising/models/
+src/mangacolv2_repo/**.pth
+
+# Data (user supplied / generated)
+input/*
+!input/.gitkeep
+output/*
+!output/.gitkeep
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

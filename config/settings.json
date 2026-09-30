@@ -1,0 +1,59 @@
+{
+  "engine": "mangacolv2",
+
+  "mangacolv2_model_dir": "models/mangacolv2",
+  "mangacolv2_generator": "generator.zip",
+  "mangacolv2_denoiser": "net_rgb.pth",
+  "mangacolv2_size": 576,
+  "mangacolv2_denoise": true,
+  "mangacolv2_denoise_sigma": 25,
+
+  "model_dir": "models",
+  "model_file": "colorization_release_v2.pth",
+
+  "comicnet_model_dir": "models/comicnet",
+  "comicnet_model_file": "colorizer.pth",
+  "comicnet_divisor": 64,
+
+  "input_dir": "input",
+  "output_dir": "output",
+  "output_suffix": "_colored",
+  "outputs": ["image", "cbz", "pdf"],
+  "keep_images": false,
+  "long_side": 512,
+  "device": "cpu",
+  "supported_ext": [".png", ".jpg", ".jpeg", ".bmp", ".webp", ".tif", ".tiff"],
+
+  "preprocess": true,
+  "pre_black_point": 2.0,
+  "pre_white_point": 98.0,
+  "pre_clean_screentone": true,
+  "pre_screentone_ksize": 3,
+  "pre_sharpen_lines": true,
+  "pre_denoise": true,
+  "pre_median_ksize": 3,
+  "pre_gamma": 1.0,
+
+  "postprocess": true,
+  "post_mode": "line_overlay",
+  "post_line_dark": 90,
+  "post_line_soft": 40,
+  "post_line_strength": 1.0,
+  "post_paper_restore": true,
+  "post_paper_lo": 228,
+  "post_paper_hi": 250,
+  "post_paper_strength": 1.0,
+
+  "upscale": true,
+  "upscale_factor": 2,
+  "upscale_model": "models/upscale/RealESRGAN_x2plus.onnx",
+  "upscale_tile": 256,
+  "upscale_max_side": 2600,
+
+  "post_smooth_radius": 6,
+  "post_smooth_eps": 0.02,
+  "post_saturation": 1.7,
+  "post_max_dev": 85.0,
+  "post_white_preserve": false,
+  "post_white_threshold": 250
+}
