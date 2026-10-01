@@ -167,6 +167,7 @@ def colorize_archive(
     keep_pages: bool = False,
     repack_cbz: bool = True,
     pages_dir: Path | str | None = None,
+    on_progress: Callable[[int, int, Path], None] | None = None,
 ) -> tuple[int, int, ArchiveResult]:
     """Colorize a single CBZ, writing its pages into their own subfolder.
 
@@ -214,7 +215,8 @@ def colorize_archive(
         extract_cbz(archive, pages_in)
 
         ok, failed, produced = colorize_folder(
-            pages_in, pages_dir, colorizer=colorizer, upscale=upscale
+            pages_in, pages_dir, colorizer=colorizer, upscale=upscale,
+            on_progress=on_progress,
         )
 
         if produced and repack_cbz:
@@ -236,6 +238,7 @@ def colorize_input(
     colorizer=None,
     upscale: bool | None = None,
     repack_cbz: bool = True,
+    on_progress: Callable[[int, int, Path], None] | None = None,
 ) -> tuple[int, int, list[ArchiveResult], list[Path]]:
     """Colorize everything found in ``input_dir``.
 
@@ -245,6 +248,10 @@ def colorize_input(
       (``<name>/``), so pages from different archives never collide. When
       ``repack_cbz`` is True each archive also gets ``<name>_colorized.cbz``.
     - Loose images are colorized flat into ``output_dir``.
+
+    ``on_progress(current, total, src)`` — optional — reports progress across
+    **all** pages (archives first, then loose images) with a running total, so
+    the caller can drive a single progress bar.
 
     Returns ``(success, failed, archive_results, loose_files)`` so the caller can
     build the right per-archive (and/or combined) CBZ/PDF outputs.
@@ -266,16 +273,40 @@ def colorize_input(
               "(put images or a .cbz there)")
         return 0, 0, [], []
 
+    # Total pages across archives + loose images, so progress is one bar.
+    from cbz import list_cbz_pages
+
+    def _cf(prefix: int, grand_total: int):
+        """Wrap on_progress with a running offset across sources."""
+        def _cb(current: int, _local_total: int, src: Path) -> None:
+            if on_progress:
+                on_progress(prefix + current, grand_total, src)
+        return _cb if on_progress else None
+
+    grand_total = len(images)
+    for arc in archives:
+        try:
+            grand_total += len(list_cbz_pages(arc))
+        except Exception:  # noqa: BLE001
+            grand_total += 1
+
+    seen = 0  # pages completed so far (offset for the next source)
+
     # 1) Comic archives — each into its own output subfolder.
     for arc in archives:
         if _cancel.is_cancelled():
             print("[batch] cancelled by user.")
             return total_ok, total_failed, archive_results, loose_files
         print(f"[batch] archive: {arc.name}")
+        try:
+            arc_pages = len(list_cbz_pages(arc))
+        except Exception:  # noqa: BLE001
+            arc_pages = 1
         ok, failed, result = colorize_archive(
             arc, output_dir, colorizer=colorizer, upscale=upscale,
-            repack_cbz=repack_cbz,
+            repack_cbz=repack_cbz, on_progress=_cf(seen, grand_total),
         )
+        seen += arc_pages
         total_ok += ok
         total_failed += failed
         archive_results.append(result)
@@ -283,7 +314,8 @@ def colorize_input(
     # 2) Loose images — flat into the output folder (combined later).
     if images and not _cancel.is_cancelled():
         ok, failed, produced = colorize_folder(
-            input_dir, output_dir, colorizer=colorizer, upscale=upscale
+            input_dir, output_dir, colorizer=colorizer, upscale=upscale,
+            on_progress=_cf(seen, grand_total),
         )
         total_ok += ok
         total_failed += failed
