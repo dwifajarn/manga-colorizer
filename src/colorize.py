@@ -18,6 +18,7 @@ Public API:
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -60,6 +61,42 @@ def load_settings(path: Path | str = DEFAULT_SETTINGS) -> dict[str, Any]:
         with open(path, "r", encoding="utf-8") as fh:
             defaults.update(json.load(fh))
     return defaults
+
+
+def configure_threads(settings: dict[str, Any] | None = None) -> int:
+    """Set torch / BLAS / onnxruntime intra-op threads before loading a model.
+
+    The pipeline is sequential, but the compute is threaded internally. This
+    applies ``settings['threads_per_worker']`` (default: all cores), unless an
+    ``OMP_NUM_THREADS`` environment override asks for fewer. Call it *before*
+    the model is built so the thread pools pick up the value.
+
+    Returns the thread count used.
+    """
+    import os
+
+    settings = settings or {}
+    cores = os.cpu_count() or 1
+    threads = settings.get("threads_per_worker")
+    if threads is None:
+        threads = cores
+    threads = max(1, int(threads))
+
+    env = os.environ.get("OMP_NUM_THREADS")
+    if env and env.isdigit() and int(env) > 0:
+        threads = min(threads, int(env))
+
+    try:
+        import torch
+
+        torch.set_num_threads(threads)
+    except Exception:  # noqa: BLE001 - torch optional at this layer
+        pass
+
+    os.environ.setdefault("OMP_NUM_THREADS", str(threads))
+    os.environ.setdefault("MKL_NUM_THREADS", str(threads))
+    os.environ.setdefault("ORT_NUM_THREADS", str(threads))
+    return threads
 
 
 # ---------------------------------------------------------------------------

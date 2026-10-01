@@ -47,7 +47,16 @@ class Upscaler:
                     "Run:  python scripts/download_model.py --engine upscale"
                 )
             opts = ort.SessionOptions()
-            opts.intra_op_num_threads = 0  # use all cores
+            # Honor the thread cap so ORT doesn't oversubscribe the CPU.
+            # settings['threads_per_worker'] wins, then the ORT_NUM_THREADS
+            # env var, else 0 = use all available cores.
+            import os
+
+            threads = self.settings.get("threads_per_worker")
+            if threads is None:
+                env = os.environ.get("ORT_NUM_THREADS")
+                threads = int(env) if (env and env.isdigit()) else 0
+            opts.intra_op_num_threads = max(0, int(threads))
             opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
             self._sess = ort.InferenceSession(
                 str(self.model_path), sess_options=opts,

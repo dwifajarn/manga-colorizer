@@ -13,9 +13,9 @@ warnai di sini.
 
 ## ✨ Fitur / Features
 
-- **GUI desktop** (jendela Tkinter): pilih folder, engine, kualitas, format,
-  lalu tekan **Start**. Ada progress bar, log real-time, dan tombol **Stop**.
-  Tak perlu terminal.
+- **GUI desktop** (jendela Tkinter): pilih folder, engine, preset (Quality/Fast),
+  kualitas, format, lalu tekan **Start**. Ada progress bar, log real-time,
+  tombol **Stop**, dan estimasi RAM/waktu sebelum mulai. Tak perlu terminal.
 - **3 engine** colorize: `mangacolv2` (default, terbaik untuk manga), `comicnet`,
   `zhang`.
 - **Input fleksibel**: gambar lepas (PNG/JPG) **atau file komik `.cbz`/`.zip`**.
@@ -88,16 +88,37 @@ Akan muncul jendela dengan:
 
 - **Folders** — pilih folder *Input* (default `input/`) dan *Output*
   (default `output/`).
-- **Options** — engine (dropdown), *Quality size* (256–768), *Saturation*,
-  dan centang format (**PNG / CBZ / PDF**) plus **Upscale 2×**.
+- **Options** — engine (dropdown), **Preset** (lihat bawah), *Quality size*
+  (256–768), *Saturation*, dan centang format (**PNG / CBZ / PDF**) plus
+  **Upscale 2×**.
 - **Progress** — progress bar + status per halaman.
 - **Log** — log proses real-time.
 - Tombol **▶ Start**, **■ Stop** (membatalkan dengan rapi — halaman yang
   sedang diproses diselesaikan dulu, sisanya dilewati, hasil yang sudah jadi
   tetap dipaketkan), **📂 Open Output**, dan **Exit**.
 
+Saat menekan **Start**, GUI menampilkan **perkiraan** RAM puncak & waktu
+(berdasarkan jumlah halaman, *quality size*, dan upscale). Bila RAM bebas
+terlihat lebih kecil dari perkiraan, akan muncul **peringatan** dan saran
+memakai preset **Fast** atau mematikan *Upscale 2×*.
+
 Tutup jendela saat proses berjalan akan menanyakan konfirmasi; proses
 dihentikan dengan rapi.
+
+#### Preset
+
+- **Quality** (default) — `mangacolv2_size = 576`, denoise aktif, tanpa
+  upscale. Kualitas terbaik; lebih lambat & lebih berat.
+- **Fast** — `mangacolv2_size = 512`, denoise & upscale mati. Hemat RAM dan
+  waktu; cocok untuk laptop 8–16 GB atau batch besar.
+
+Preset hanya mengisi ulang pilihan (slider/centang); Anda masih bisa
+menyesuaikannya manual setelah memilih.
+
+> **Catatan RAM.** Pipeline jalan **sekuensial** (satu halaman sekaligus).
+> Beban terbesar bukan CPU, tapi RAM — terutama tahap **Upscale 2×**
+> (Real-ESRGAN memproses halaman resolusi penuh). Di laptop RAM terbatas,
+> matikan upscale atau pakai preset **Fast**.
 
 ### Termudah (versi terminal)
 
@@ -159,7 +180,7 @@ python src/cli.py batch input/ output/ --engine comicnet
 python src/cli.py batch input/ output/ --upscale      # paksa aktif
 python src/cli.py batch input/ output/ --no-upscale   # matikan
 ```
-Default mengikuti `settings.json` (`"upscale": true`).
+Default mengikuti `settings.json` (`"upscale": false`).
 
 ---
 
@@ -240,7 +261,7 @@ python src/package.py output/ out/mycomic.pdf
 | `pre_screentone_ksize` | `3` | Blur untuk merapikan titik screentone |
 | `postprocess` | `true` | Line-overlay + restore kertas putih |
 | `post_paper_lo/hi` | `228`/`250` | Ambang area "kertas" yang diputihkan |
-| `upscale` | `true` | Aktifkan upscale Real-ESRGAN |
+| `upscale` | `false` | Aktifkan upscale Real-ESRGAN (berat: RAM & waktu) |
 | `upscale_factor` | `2` | Faktor upscale |
 | `upscale_tile` | `256` | Ukuran tile (batasi pemakaian RAM) |
 | `output_suffix` | `"_colored"` | Suffix nama file output |
@@ -270,6 +291,7 @@ manga-colorizer/
 └── src/
     ├── gui.py                   # GUI desktop (Tkinter)
     ├── cancel.py                # flag pembatalan (dipakai GUI)
+    ├── sysinfo.py               # baca RAM bebas + estimasi kasar (GUI)
     ├── mangacolv2_engine.py     # engine default (GAN)
     ├── mangacolv2_repo/         # kode vendored qweasdd
     ├── comicnet_engine.py       # engine ColorComicNet

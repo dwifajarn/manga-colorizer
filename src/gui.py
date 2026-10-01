@@ -91,6 +91,8 @@ class MangaColorizerGUI:
         self.var_pdf = tk.BooleanVar(value=True)
         self.var_upscale = tk.BooleanVar(value=False)
         self.var_status = tk.StringVar(value="Idle.")
+        # Denoise has no widget; it is driven by the preset buttons.
+        self._preset_denoise = True
 
         self._build_ui()
         self._poll_queues()
@@ -157,9 +159,25 @@ class MangaColorizerGUI:
         self.lbl_sat = ttk.Label(opts, text="1.7", width=4)
         self.lbl_sat.grid(row=2, column=2, sticky="e")
 
+        # Presets: one click to a sensible bundle of settings.
+        ttk.Label(opts, text="Preset:").grid(
+            row=3, column=0, sticky="w", pady=3)
+        preset_row = ttk.Frame(opts)
+        preset_row.grid(row=3, column=1, columnspan=2, sticky="w", padx=6)
+        ttk.Button(preset_row, text="Quality",
+                   command=lambda: self._apply_preset("quality")).pack(
+            side="left", padx=(0, 6))
+        ttk.Button(preset_row, text="Fast",
+                   command=lambda: self._apply_preset("fast")).pack(side="left")
+        ttk.Label(
+            opts,
+            text="Fast = smaller size, no denoise/upscale (less RAM & time).",
+            foreground="#888",
+        ).grid(row=4, column=0, columnspan=3, sticky="w", pady=(0, 2))
+
         # Output format checkboxes.
         fmt = ttk.Frame(opts)
-        fmt.grid(row=3, column=0, columnspan=3, sticky="w", pady=(6, 0))
+        fmt.grid(row=5, column=0, columnspan=3, sticky="w", pady=(6, 0))
         ttk.Label(fmt, text="Formats:").pack(side="left", padx=(0, 8))
         ttk.Checkbutton(fmt, text="PNG", variable=self.var_png).pack(
             side="left", padx=3)
@@ -221,6 +239,24 @@ class MangaColorizerGUI:
     def _on_sat(self, _value: str) -> None:
         self.var_saturation.set(round(float(self.var_saturation.get()), 1))
         self.lbl_sat.configure(text=f"{self.var_saturation.get():.1f}")
+
+    # Preset bundles. "Fast" trades a little quality for far less RAM & time;
+    # "Quality" is the tuned default for the best output.
+    PRESETS = {
+        "quality": {"size": 576, "denoise": True, "upscale": False},
+        "fast": {"size": 512, "denoise": False, "upscale": False},
+    }
+
+    def _apply_preset(self, name: str) -> None:
+        preset = self.PRESETS.get(name)
+        if not preset:
+            return
+        self.var_size.set(preset["size"])
+        self.lbl_size.configure(text=str(preset["size"]))
+        self._preset_denoise = preset["denoise"]
+        self.var_upscale.set(preset["upscale"])
+        self.append_log(f"[gui] preset '{name}': size={preset['size']}, "
+                        f"denoise={preset['denoise']}, upscale={preset['upscale']}\n")
 
     def _pick_input(self) -> None:
         chosen = filedialog.askdirectory(
@@ -297,6 +333,7 @@ class MangaColorizerGUI:
         settings["mangacolv2_size"] = int(self.var_size.get())
         settings["post_saturation"] = float(self.var_saturation.get())
         settings["upscale"] = bool(self.var_upscale.get())
+        settings["mangacolv2_denoise"] = bool(self._preset_denoise)
 
         outputs = []
         if self.var_png.get():
@@ -307,6 +344,55 @@ class MangaColorizerGUI:
             outputs.append("pdf")
         settings["outputs"] = outputs or ["image"]
         return settings
+
+    def _count_pages(self, in_dir: Path, settings: dict) -> int:
+        """Rough count of pages to process (loose images + pages inside .cbz)."""
+        import batch as _batch
+
+        exts = settings.get("supported_ext", [".png", ".jpg", ".jpeg"])
+        total = len(_batch.collect_images(in_dir, exts))
+        for arc in _batch.collect_archives(in_dir):
+            try:
+                from cbz import list_cbz_pages
+
+                total += len(list_cbz_pages(arc))
+            except Exception:  # noqa: BLE001
+                total += 1  # count the archive at least
+        return total
+
+    def _confirm_estimate(self, pages: int, settings: dict) -> bool:
+        """Show a coarse RAM/time estimate and warn on likely RAM shortage.
+
+        Returns True to proceed, False to cancel.
+        """
+        import sysinfo
+
+        peak = sysinfo.estimate_peak_ram(pages, settings.get("upscale", False),
+                                         settings.get("engine", "mangacolv2"))
+        secs = sysinfo.estimate_seconds(pages, int(settings.get("mangacolv2_size", 576)),
+                                        settings.get("upscale", False),
+                                        settings.get("engine", "mangacolv2"))
+        free = sysinfo.free_ram_bytes()
+
+        lines = [
+            f"Pages to process: ~{pages}",
+            f"Estimated peak RAM: ~{sysinfo.fmt_bytes(peak)}",
+            f"Estimated time: ~{secs // 60} min {secs % 60} s  (rough)",
+        ]
+        if free is not None:
+            lines.append(f"Free RAM now: {sysinfo.fmt_bytes(free)}")
+
+        risky = free is not None and free < peak
+        if risky:
+            lines.append("")
+            lines.append("WARNING: free RAM looks lower than the estimate. "
+                         "The job may be slow or fail.")
+            if settings.get("upscale"):
+                lines.append("Tip: use the 'Fast' preset or turn off 'Upscale 2x'.")
+
+        lines.append("")
+        lines.append("Proceed?")
+        return messagebox.askyesno("Before we start", "\n".join(lines))
 
     def _start(self) -> None:
         if self._running:
@@ -333,6 +419,17 @@ class MangaColorizerGUI:
                 f"No images or .cbz/.zip files found in:\n{in_dir}")
             return
 
+        # Estimate RAM/time up front; warn (and let the user back out) if the
+        # free memory looks too small for the job — very relevant on 8-16 GB
+        # laptops where upscaling can exhaust RAM.
+        try:
+            pages = self._count_pages(in_dir, settings)
+        except Exception:  # noqa: BLE001
+            pages = 1
+        if not self._confirm_estimate(pages, settings):
+            self._set_status("Cancelled before start.")
+            return
+
         out_dir.mkdir(parents=True, exist_ok=True)
         self.append_log(f"\n=== Start · engine={settings['engine']} · "
                         f"formats={','.join(settings['outputs'])} · "
@@ -357,7 +454,10 @@ class MangaColorizerGUI:
         try:
             import batch as _batch
             from cli import _emit_outputs, _parse_outputs
+            from colorize import configure_threads
 
+            # Configure torch/BLAS thread counts before loading the model.
+            configure_threads(settings)
             colorizer = _batch.build_engine(settings)
             want = _parse_outputs(settings.get("outputs", ["image"]))
 
