@@ -393,6 +393,9 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    import cancel as _cancel
+
+    _cancel.reset()
     return args.func(args)
 
 

@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Iterable
 
+import cancel as _cancel
 from colorize import Colorizer, load_settings
 
 # Regex to sort names like "page_2.png" before "page_10.png".
@@ -128,7 +129,12 @@ def colorize_folder(
     ok = failed = 0
     produced: list[Path] = []
     total = len(files)
+    cancelled = False
     for idx, src in enumerate(files, 1):
+        if _cancel.is_cancelled():
+            cancelled = True
+            print("[batch] cancelled by user.")
+            break
         rel = src.relative_to(input_dir)
         dst = output_dir / rel.with_name(f"{rel.stem}{suffix}{rel.suffix}")
         try:
@@ -146,7 +152,10 @@ def colorize_folder(
         if on_progress:
             on_progress(idx, total, src)
 
-    print(f"[batch] done. success={ok} failed={failed}")
+    if cancelled:
+        print(f"[batch] stopped early. success={ok} failed={failed}")
+    else:
+        print(f"[batch] done. success={ok} failed={failed}")
     return ok, failed, produced
 
 
@@ -259,6 +268,9 @@ def colorize_input(
 
     # 1) Comic archives — each into its own output subfolder.
     for arc in archives:
+        if _cancel.is_cancelled():
+            print("[batch] cancelled by user.")
+            return total_ok, total_failed, archive_results, loose_files
         print(f"[batch] archive: {arc.name}")
         ok, failed, result = colorize_archive(
             arc, output_dir, colorizer=colorizer, upscale=upscale,
@@ -269,7 +281,7 @@ def colorize_input(
         archive_results.append(result)
 
     # 2) Loose images — flat into the output folder (combined later).
-    if images:
+    if images and not _cancel.is_cancelled():
         ok, failed, produced = colorize_folder(
             input_dir, output_dir, colorizer=colorizer, upscale=upscale
         )

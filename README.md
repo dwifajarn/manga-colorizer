@@ -13,6 +13,9 @@ warnai di sini.
 
 ## ✨ Fitur / Features
 
+- **GUI desktop** (jendela Tkinter): pilih folder, engine, kualitas, format,
+  lalu tekan **Start**. Ada progress bar, log real-time, dan tombol **Stop**.
+  Tak perlu terminal.
 - **3 engine** colorize: `mangacolv2` (default, terbaik untuk manga), `comicnet`,
   `zhang`.
 - **Input fleksibel**: gambar lepas (PNG/JPG) **atau file komik `.cbz`/`.zip`**.
@@ -73,7 +76,31 @@ python src/cli.py check
 
 ## 🖥️ Cara Pakai / Usage
 
-### Termudah (Windows)
+### Cara termudah — GUI (jendela)
+
+**Klik dua kali `JALANKAN-GUI.bat`** (Windows) atau jalankan:
+
+```bash
+python src/gui.py
+```
+
+Akan muncul jendela dengan:
+
+- **Folders** — pilih folder *Input* (default `input/`) dan *Output*
+  (default `output/`).
+- **Options** — engine (dropdown), *Quality size* (256–768), *Saturation*,
+  dan centang format (**PNG / CBZ / PDF**) plus **Upscale 2×**.
+- **Progress** — progress bar + status per halaman.
+- **Log** — log proses real-time.
+- Tombol **▶ Start**, **■ Stop** (membatalkan dengan rapi — halaman yang
+  sedang diproses diselesaikan dulu, sisanya dilewati, hasil yang sudah jadi
+  tetap dipaketkan), **📂 Open Output**, dan **Exit**.
+
+Tutup jendela saat proses berjalan akan menanyakan konfirmasi; proses
+dihentikan dengan rapi.
+
+### Termudah (versi terminal)
+
 Taruh gambar **atau file `.cbz`** di folder `input/`, lalu **klik dua kali
 `JALANKAN.bat`**. Anda akan ditanya format output:
 
@@ -227,7 +254,8 @@ Tips: matikan `"upscale": false` untuk proses lebih cepat; naikkan
 
 ```
 manga-colorizer/
-├── JALANKAN.bat                 # runner sekali-klik (Windows)
+├── JALANKAN.bat                 # runner sekali-klik (Windows, terminal)
+├── JALANKAN-GUI.bat             # runner sekali-klik GUI (Windows)
 ├── config/settings.json         # pengaturan
 ├── models/
 │   ├── mangacolv2/              # bobot engine default (gitignored)
@@ -240,6 +268,8 @@ manga-colorizer/
 ├── output/                      # hasil + CBZ/PDF
 ├── scripts/download_model.py    # unduh bobot
 └── src/
+    ├── gui.py                   # GUI desktop (Tkinter)
+    ├── cancel.py                # flag pembatalan (dipakai GUI)
     ├── mangacolv2_engine.py     # engine default (GAN)
     ├── mangacolv2_repo/         # kode vendored qweasdd
     ├── comicnet_engine.py       # engine ColorComicNet
